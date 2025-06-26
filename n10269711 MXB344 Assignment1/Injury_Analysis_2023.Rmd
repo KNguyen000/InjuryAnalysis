@@ -1,0 +1,418 @@
+---
+title: "Assignment"
+author: "Kevin Nguyen"
+date: "2023-04-17"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+
+# Introduction
+
+We have been tasked with performing an analysis on workplace injury data to help inform the company's response to a growing crisis.
+
+## Research Question
+
+1.  Recommend an existing safety regime, based on injury rate, to implement as the international standard company-wide.
+2.  Find supporting evidence to suggest whether experience is more important than safety regime in reducing injury rate.
+
+```{r cars, echo=FALSE, include=FALSE}
+library(tidyverse)
+library(GGally)
+library(MASS)
+library(ggpubr)
+library(DHARMa)
+library(AER)
+library(reshape2)
+library(dplyr)
+```
+
+## Including Plots
+
+```{r, echo=FALSE}
+#### Read in data
+data <- read.csv("injury.csv",header=TRUE)
+#Factorise data
+data$ID <- seq.int(nrow(data))
+data$Safety <- factor(data$Safety, levels = 1:4)
+data$Experience <- factor(data$Experience, levels = 1:4)
+data$Injuries <- as.integer(data$Injuries)
+data$Hours <- as.integer(data$Hours)
+```
+
+## Analysis of Data
+
+```{r, echo=FALSE}
+summary(data)
+```
+
+Observations of the data show that the data set contains information on 72 groups, with each group encountering 162 injuries per year on average. The predictors Safety and Experienced are roughly balanced by group as Safety has 18 group in each Safety Regime, and Experience ranging from 16 and 20, which are very similar frequencies. Hours appears to have a large range from the Min to the Max.
+
+The response will be transformed into $log(\frac{Injuries+1}{Hours})$. The Hours is in the denominator because our research question is to find the injury rate. Injury rate is a better measure for our solution than injury as injury rate treats workers equally irrespective how many hours they worked in 12 months. The data of Injuries has a minimum of 0. This causes an undefined answer when solving for log(0). Hence the addition of 1 to the numerator is to ensure numerical stability, and data points with Injuries = 0 are included in the modelling. The log is to transform the output away from very small numbers, as this could lead to truncating errors, and closer to numbers that are easier for analysts to comprehend and compare.
+
+## Exploratory Analysis
+
+```{r, echo=FALSE}
+#plot data using boxplots
+inj_v_saf <- ggplot(data = data) + 
+  geom_boxplot(aes(y = log((Injuries+1)/Hours), x = Safety)) + 
+  labs(y = "Injury Rate", x = "Safety Regime")
+inj_v_exp <- ggplot(data = data) + 
+  geom_boxplot(  aes(y = log((Injuries+1)/Hours), x = Experience)  ) + 
+  labs(y = "Injury Rate", x = "Experience Level")
+
+inj_v_safety_experience  <- ggplot(data = data) +
+  geom_boxplot(aes(x = Safety, y  = log((Injuries+1)/Hours), group = interaction(Experience,Safety), 
+  fill = Experience)) + 
+  labs(y = "Injury Rate", x = "Safety Regime", fill = "Experience")
+
+inj_v_experience_safety <- ggplot(data = data) +
+  geom_boxplot(aes(x = Experience, y  = log((Injuries+1)/Hours), group = interaction(Experience,Safety), 
+  fill = Safety)) + 
+  labs(y = "Injury Rate", x = "Experience Level", fill = "Safety")
+
+
+  
+
+
+ggarrange(inj_v_saf,inj_v_exp, 
+  inj_v_safety_experience,inj_v_experience_safety,
+
+  ncol = 2,nrow = 2)
+```
+
+Observing the plots above, the injury rate of experience1 is larger than the injury rate of experience4. There are large differences in injury rate among different experience levels. This suggests that experience may have strong influence on injury rate. There is less difference on injury rate among Safety levels than experience. This may suggest that experience is more important than safety at reducing injury rate. The plots also suggest that safety regime 2 has the lowest injury rate outcome, possibly making it the most ideal safety regime. The plots did not include Hours effect on injury rate as analysing Hours is not relevant to the research questions.
+
+## Poisson
+
+We will be fitting the data with the poisson regression model to model and predict the injury data. Poisson regression is ideal as our data uses a count dependent variable and categorical/continuous predictors. There are a total of 4 poisson models, each testing for an appropriate fit using different combinations of predictors. The response will be Injuries+1 due to the injury rate, and the predictors will be Safety, Experience and Safety Experience interaction. An additional predictor is the offset of log(Hours).
+
+```{r, echo=FALSE}
+poisson.m1 <- glm(data=data,formula = Injuries+1~Safety+offset(log(Hours)),family = poisson(link="log"))
+poisson.m2 <- glm(data=data,formula = Injuries+1~Experience+offset(log(Hours)),family = poisson(link="log"))
+poisson.m3 <- glm(data=data,formula = Injuries+1~Safety+Experience+offset(log(Hours)),family = poisson(link="log"))
+poisson.m4 <- glm(data=data,formula = Injuries+1~Safety+Experience+Safety:Experience+offset(log(Hours)),family = poisson(link="log"))
+
+model.list <- list(
+  "m1" = poisson.m1,
+  "m2" = poisson.m2,
+  "m3" = poisson.m3,
+  "m4" = poisson.m4
+)
+
+aics <- sapply(model.list,FUN = AIC)
+bics <- sapply(model.list,FUN = BIC)
+
+#Aggregate measures of fit into a single data-frame for plotting
+plot_data <- 
+  data.frame(
+    model = c("Poisson1","Poisson2","Poisson3","Poisson4"),
+    aic = aics,
+    bic = bics
+  )
+
+#Display table with measures:
+knitr::kable(plot_data,row.names = FALSE,
+             col.names = c("Model","AIC","BIC"))
+
+#Melt the data into long form for ggplot:
+long_plot_data <- melt(data = plot_data,
+                  id = "model",
+                  variable.name = "measure")
+
+#Plot together for comparison
+ggplot(
+  data = long_plot_data,
+  mapping = aes(
+    x = model,
+    y = value,
+    group = measure,
+    colour = measure
+  )
+) + geom_point()+
+  scale_colour_discrete(
+    breaks = c("aic","bic"),
+    labels = c("AIC","BIC")
+  ) +
+  labs(x = "Model",y = "Value", colour = "Measure",title="Model Comparison")
+
+```
+
+The best performing model is Poisson 4. This because it gave lowest AIC and BIC value compared to the other models. This means the model of choice is Poisson 4. Now we will check on the model fit.
+
+```{r, echo=FALSE}
+#best model is m4 (full model) with best AIC
+final_poisson_model <- poisson.m4
+```
+
+```{r, echo=FALSE}
+plot(simulateResiduals(poisson.m4))
+```
+
+The QQ plot shows that the poisson model has failed all 3 tests. The model is over dispersed as more residuals are in the tails of the distribution than in the center. The residuals are not normally distributed as they do not follow the line. Residuals vs predicted show that the 0.75 quantile residuals are not randomly distributed and has been flagged by the function. Overall, the DHARmMa residuals show that the Poisson is a weak fit for the data.
+
+```{r, echo=FALSE}
+dispersiontest(final_poisson_model)
+Nmp <- final_poisson_model$df.residual
+phi_hat <- deviance(final_poisson_model)/Nmp
+phi_hat > 1 + 3*sqrt(2/Nmp)
+#over dispered try differnet models
+```
+
+The above shows that the overdispersion test gave a value of dispersion=24, this is very far away from the appropriate value of 1, so we conclude by saying the Poisson model is over dispersed and not appropriate to fit the data. We will now find the Quasi-Poisson and Negative Binomial and see their suitability in fitting the data.
+
+## Quasi-Poisson
+
+We create a Quasi-Poisson model and inspect later.
+
+```{r, echo=FALSE}
+quasi_model <- glm(data=data,
+                              formula = poisson.m4$formula,
+                              family = "quasipoisson"
+                              )
+
+```
+
+## Negative Binomial
+
+Build Negative Binomial models. We created 4 models using a combination of predictors.
+
+```{r, echo=FALSE}
+NB.m1 <- glm.nb(data=data,formula = Injuries+1~Safety+offset(log(Hours)),link="log")
+NB.m2 <- glm.nb(data=data,formula = Injuries+1~Experience+offset(log(Hours)),link="log")
+NB.m3 <- glm.nb(data=data,formula = Injuries+1~Safety+Experience+offset(log(Hours)),link="log")
+NB.m4 <- glm.nb(data=data,formula = Injuries+1~Safety+Experience+Safety:Experience+offset(log(Hours)),link="log")
+NB.m5 <- glm.nb(data=data,formula = Injuries+1~Safety+Experience+offset(log(Hours)),link="log")
+
+
+model.list <- list(
+  "NB1" = NB.m1,
+  "NB2" = NB.m2,
+  "NB3" = NB.m3,
+  "NB4" = NB.m4
+)
+aics <- sapply(model.list,FUN = AIC)
+bics <- sapply(model.list,FUN = BIC)
+
+
+#Aggregate measures of fit into a single data-frame for plotting
+plot_data <- 
+  data.frame(
+    model = c("NB1","NB2","NB3","NB4"),
+    aic = aics,
+    bic = bics
+    
+    
+  )
+
+#Display table with measures:
+knitr::kable(plot_data,row.names = FALSE,
+             col.names = c("Model","AIC","BIC"))
+
+```
+
+m3 performs the best in AIC, m2 has the lowest BIC. We choose to assess the models on AIC over the BIC as BIC penalises more complex models, however we have few predictors and want to keep as many as possible.
+
+```{r, echo=FALSE}
+#cant pick test residuals too similiar
+
+negbin_residuals = simulateResiduals(NB.m3)
+plot(negbin_residuals,title="Model 3")
+
+
+#pick m4 no problems detected
+final_NB_model <- NB.m3
+```
+
+The Negative Binomial looks to be a good fit to the data. The residuals in the QQ plot are normally distributed, the residuals are roughly evenly distributed across tails and center, and all 3 tests have not been flagged. The Residuals vs predicted have not been flagged and look to be randomly distributed with no trends.
+
+## Model Comparison
+
+Having assessed that the Poisson model was a poor fit to the data, we now compare the quasi-poisson and negative binomial models find the best fit.
+
+```{r, echo=FALSE}
+# Get estimate of phi_hat
+res <- quasi_model$df.residual 
+phi_hat <- deviance(quasi_model)/res 
+
+# Plot mean-variance relationship
+xb <- predict(final_NB_model)
+g <- cut(xb, breaks=quantile(xb,seq(0,100,10)/100)) 
+m <- tapply(data$Injuries, g, mean)
+v <- tapply(data$Injuries, g, var)
+plot(m, v, xlab="Mean", ylab="Variance",
+main="Mean-Variance Relationship")
+x <- seq(0,500,0.1)
+lines(x, x*phi_hat, lty="dashed")
+lines(x, x*(1+x/final_NB_model$theta)) # VAR[Y] = mu + mu^2/theta 
+legend("topleft", lty=c("dashed","solid"),
+legend=c("Quasi Poisson","Neg. Binom."), inset=0.05)
+```
+
+The Mean-Variance Relationship graph shows that the Quasi-Poisson does not fit the data very well. The Negative Binomial was a better fit. Therefore the Negative Binomial model was chosen as the best model.
+
+## Checking Validity of final model
+
+We do residual plots to test the validity of the model and whether any assumptions are violated.
+
+```{r, echo=FALSE}
+plot(final_NB_model)
+```
+
+The Residuals vs Fitted plot show no clear linear trends and no constant variance fanning. The QQ plot is normally distributed, however there bottom left tail does not follow the normal distribution. This is only minor and so does not violate any glm assumptions. The square root standard deviation residuals vs predicted show no clear linear trends or fanning, this suggests that there is no further significant variability that is not captured by the model. Therefore, the assumptions of the glm model have not been violated and the final Negative Binomial model is valid.
+
+The summary of the final Negative Binomial model
+
+```{r, echo=FALSE}
+summary(final_NB_model)
+```
+
+## Results
+
+Below is the best final model, given by the Negative Binomial
+
+$$
+log(\frac{Injuries+1}{Hours})=-7.27-0.28Safety2+0.04Safety3+0.20Safety4-
+$$
+
+$$
+0.57Experience2-1.03Experience3-1.89Experience4
+$$
+
+```{r, echo=FALSE}
+# Load the dplyr library for data manipulation
+
+
+# Define a function to calculate lower, effect, and upper values
+calculate_confidence_intervals <- function(estimates, std_errors, reference_group) {
+  lower_log <- estimates - (1.96 * std_errors)
+  upper_log <- estimates + (1.96 * std_errors)
+  
+  lower <- exp(lower_log)
+  effect <- exp(estimates)
+  upper <- exp(upper_log)
+  
+  if (reference_group) {
+    # Calculate average std_error for the reference group
+    avg_std_error <- mean(std_errors)
+    
+    # Calculate confidence intervals for reference group
+    lower_reference <- exp(0 - (1.96 * avg_std_error))
+    upper_reference <- exp(0 + (1.96 * avg_std_error))
+    
+    # Replace reference group values with calculated values
+    lower[1] <- lower_reference
+    effect[1] <- 1
+    upper[1] <- upper_reference
+  }
+  
+  data.frame(Lower = lower, Effect = effect, Upper = upper)
+}
+safety_sd = as.numeric(summary(NB.m3)$coefficients[2:4,2])
+safety_est = as.numeric(summary(NB.m3)$coefficients[2:4,1])
+
+experience_sd = as.numeric(summary(NB.m3)$coefficients[5:7,2])
+experience_est = as.numeric(summary(NB.m3)$coefficients[5:7,1])
+
+
+# Average the standard errors for the other levels (excluding reference levels)
+avg_std_error_safety <- mean(safety_sd)
+avg_std_error_experience <- mean(experience_sd)
+
+# Define estimates and standard errors for Safety and Experience
+safety_estimates <- c(1,safety_est)
+safety_std_errors <- c(avg_std_error_safety, safety_sd)
+
+experience_estimates <- c(1, experience_est)
+experience_std_errors <- c(avg_std_error_experience, experience_sd)
+
+# Calculate lower, effect, and upper values for Safety and Experience
+safety_confidence_intervals <- calculate_confidence_intervals(safety_estimates, safety_std_errors, TRUE)
+
+experience_confidence_intervals <- calculate_confidence_intervals(experience_estimates, experience_std_errors, TRUE)
+
+# create a vector of coefficients
+predictors <- paste0(rep(c("Safety", "Experience"), each = 4), rep(1:4, 2))
+
+# Combine Safety and Experience confidence intervals into a single table
+combined_table <- data.frame(
+  Predictors = predictors,
+  Lower = c(safety_confidence_intervals$Lower, experience_confidence_intervals$Lower),
+  RateRatio = c(safety_confidence_intervals$Effect, experience_confidence_intervals$Effect),
+  Upper = c(safety_confidence_intervals$Upper, experience_confidence_intervals$Upper)
+)
+
+combined_table
+
+```
+
+```{r, echo=FALSE}
+
+df <- data.frame(x = combined_table[5:8,1],
+                 F =combined_table[5:8,3],
+                 L =combined_table[5:8,2],
+                 U =combined_table[5:8,4])
+
+ require(ggplot2)
+experience_CI_plot <- ggplot(df, aes(x = x, y = F)) +
+   labs(x="Experience Level",y="Injury Rate", title="95% Confidence Intervals", subtitle="Experience Levels") +
+   geom_point(size = 4) +
+   geom_errorbar(aes(x=combined_table[5,1], ymax = U[1], ymin = L[1]),color='red') +
+   geom_errorbar(aes(x=combined_table[6,1], ymax = U[2], ymin = L[2]),color='blue') +
+  geom_errorbar(aes(x=combined_table[7,1], ymax = U[3], ymin = L[3]),color='blue') +
+ geom_errorbar(aes(x=combined_table[8,1], ymax = U[4], ymin = L[4]),color='blue') +
+geom_hline(yintercept=1,linetype="dashed", color="red")
+```
+
+```{r, echo=FALSE}
+
+df <- data.frame(x = combined_table[1:4,1],
+                 F =combined_table[1:4,3],
+                 L =combined_table[1:4,2],
+                 U =combined_table[1:4,4])
+
+ require(ggplot2)
+safety_CI_plot <- ggplot(df, aes(x = x, y = F)) +
+   labs(x="Safety Regime",y="Injury Rate",title="95% Confidence Interval",subtitle="Safety Regimes") +
+   geom_point(size = 4) +
+   geom_errorbar(aes(x=combined_table[1,1], ymax = U[1], ymin = L[1]),color='red') +
+   geom_errorbar(aes(x=combined_table[2,1], ymax = U[2], ymin = L[2]),color='blue') +
+  geom_errorbar(aes(x=combined_table[3,1], ymax = U[3], ymin = L[3]),color='blue') +
+ geom_errorbar(aes(x=combined_table[4,1], ymax = U[4], ymin = L[4]),color='blue')+ geom_hline(yintercept=1,linetype="dashed", color="red")
+
+```
+
+```{r, echo=FALSE}
+ggarrange(experience_CI_plot,safety_CI_plot
+          ,ncol=2,nrow=1)
+```
+
+The 95% confidence interval plots shown above, compares the proportional differences in injury rate of Experience levels and Safety levels with Experience 1 and Safety 1 respectively. The Experience plot shows that:
+
+Experience2 has 0.56% effect on Injury Rate as Experience1.
+
+Experience3 has 0.35% effect on Injury Rate as Experience1.
+
+Experience4 has 0.15% effect on Injury Rate as Experience1.
+
+This means that experience4 is the most ideal level within the experience group as it has the lowest rate ratio. Someone in Experience4 has an average 0.85% less likely chance of being injuried per hour, compared to someone in Experience1, adjusted for Safety regime.
+
+The Safety Regime plot shows that:
+
+Safety2 has 0.76% effect on Injury Rate as Safety1.
+
+Safety3 has 1.03% effect on Injury Rate as Safety1.
+
+Safety4 has 1.22% effect on Injury Rate as Safety1.
+
+This means that Safety2 is the most ideal level within the Safety group as it has the lowest rate ratio. Someone in Safety2 has an average 0.24% less likely chance of being injured per hour, compared to someone in Safety1, adjusted for Experience. However, Safety2 has a confidence interval of 1.02% to 0.56%, as the confidence interval still includes 1, we can not be sure whether Safety2 will be bigger or smaller than Safety1. Thus Safety2 is statistically insignificant.
+
+## Discussion
+
+Discussing the Research Questions:
+
+1\. The given data and modelling suggest that Safety Regime 2 should be implemented as the international company-wide Safety standard as it produced the lowest Injury rate. Lowest injury rate is ideal as it suggests that employees are injuried less in the workplace, regardless of how many hours they work.
+
+2\. The summary of the final model suggests that experience is more important at reducing the injury rate than safety regime as the coefficients for Experience decrease the injury rate much more than the coefficients of safety. For the biggest reduction in Injury with experience, for every 1 unit increase in Experience4, a 1.89 unit decrease in Injury Rate occurs. For the smallest reduction in Injury Rate with experience, for every 1 unit increase in Experience2, a 0.57 unit decrease in Injury Rate occurs. This is in comparison to the coefficients of Safety's levels which are a closer to 0. Safety coefficients Safety2, Safety3, Safety4 were: -0.27, 0.04 and 0.2 respectively, were values close to 0. This means that for every 1 unit increase in Safety levels, a small change in Injury Rate occurs compared to Experience. This shows that Experience was more important to preventing Injury Rate than Safety Regime.
