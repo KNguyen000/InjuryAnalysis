@@ -12,7 +12,7 @@ Documents:
 
 
 
-
+\n
 
 Summary:
 The goal of this project was to answer 2 research questions outlined in "MXB344 Assignment 1 Task Description.pdf", using the injury.csv dataset and knowledge of Generalised Linear Modelling.
