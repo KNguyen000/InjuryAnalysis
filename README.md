@@ -1,4 +1,4 @@
-# MXB344 InjuryAnalysis
+# MXB344 Generalised Linear Modelling - InjuryAnalysis
 
 Documents:
 - **MXB344 Assignment 1 Task Description.pdf** - Project Task Sheet
